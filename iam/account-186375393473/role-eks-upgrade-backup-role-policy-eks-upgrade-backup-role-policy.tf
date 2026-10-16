@@ -1,55 +1,56 @@
-# First-time adoption: import the pre-existing inline policy into
-# Terraform state, then apply the declared document (Terraform >= 1.5).
-import {
-	id = "eks-upgrade-backup-role:eks-upgrade-backup-role-policy"
-	to = aws_iam_role_policy.inline_policy
-}
-
 resource "aws_iam_role_policy" "inline_policy" {
 	name   = "eks-upgrade-backup-role-policy"
 	role   = "eks-upgrade-backup-role"
 	policy = <<-EOF
 {
-  "name": "eks-upgrade-backup-policy",
-  "statements": [
+  "Version": "2012-10-17",
+  "Statement": [
     {
-      "effect": "Allow",
-      "actions": [
+      "Action": [
         "eks:DescribeCluster",
-        "eks:ListAccessEntries"
+        "eks:ListAccessEntries",
+        "eks:CreateAccessEntry"
       ],
-      "resources": [
+      "Effect": "Allow",
+      "Resource": [
         "arn:aws:eks:ap-southeast-1:186375393473:cluster/agentic-commerce-prod-cluster"
       ]
     },
     {
-      "effect": "Allow",
-      "actions": [
-        "eks:CreateAccessEntry",
-        "eks:DeleteAccessEntry",
-        "eks:DescribeAccessEntry"
+      "Action": [
+        "eks:DescribeAccessEntry",
+        "eks:AssociateAccessPolicy",
+        "eks:ListAssociatedAccessPolicies",
+        "eks:DisassociateAccessPolicy",
+        "eks:DeleteAccessEntry"
       ],
-      "resources": [
-        "arn:aws:eks:ap-southeast-1:186375393473:access-entry/agentic-commerce-prod-cluster/*"
+      "Effect": "Allow",
+      "Resource": [
+        "*"
       ]
     },
     {
-      "effect": "Allow",
-      "actions": [
+      "Action": "iam:PassRole",
+      "Effect": "Allow",
+      "Resource": "arn:aws:iam::186375393473:role/eks-upgrade-backup-role"
+    },
+    {
+      "Action": [
         "backup:DescribeBackupVaults",
         "backup:CreateRecoveryPoint",
         "ec2:DescribeVolumes",
+        "ec2:DescribeTags",
         "ec2:CreateSnapshot",
         "ec2:DeleteSnapshot",
         "ec2:DescribeSnapshots",
         "ec2:CreateTags"
       ],
-      "resources": [
+      "Effect": "Allow",
+      "Resource": [
         "*"
       ]
     }
-  ],
-  "description": "EKS upgrade backup policy"
+  ]
 }
 EOF
 
