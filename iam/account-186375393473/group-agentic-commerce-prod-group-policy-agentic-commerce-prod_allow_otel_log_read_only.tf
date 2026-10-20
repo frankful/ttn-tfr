@@ -1,7 +1,7 @@
 # First-time adoption: import the pre-existing inline policy into
 # Terraform state, then apply the declared document (Terraform >= 1.5).
 import {
-	id = "agentic-commerce-prod-group/agentic-commerce-prod_allow_otel_log_read_only"
+	id = "agentic-commerce-prod-group:agentic-commerce-prod_allow_otel_log_read_only"
 	to = aws_iam_group_policy.inline_policy
 }
 

@@ -1,4 +1,4 @@
-resource "aws_iam_role_policy" "inline_policy" {
+resource "aws_iam_role_policy" "inline_policy11" {
 	name   = "otel-acm-prd-cloudwatch-rolePolicy"
 	role   = "otel-acm-prd-cloudwatch-role"
 	policy = <<-EOF
