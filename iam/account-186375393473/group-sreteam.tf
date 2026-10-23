@@ -10,10 +10,10 @@ resource "aws_iam_group" "group_SRETeam" {
 	path = "/"
 }
 
-import {
-	id = "SRETeam-membership"
-	to = aws_iam_group_membership.group_SRETeam_membership
-}
+# import {
+# 	id = "SRETeam-membership"
+# 	to = aws_iam_group_membership.group_SRETeam_membership
+# }
 
 resource "aws_iam_group_membership" "group_SRETeam_membership" {
 	name  = "SRETeam-membership"
