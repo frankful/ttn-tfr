@@ -8,4 +8,9 @@ import {
 resource "aws_iam_user" "user_acm-prd-bedrock" {
 	name = "acm-prd-bedrock"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DA64TA7B53" = "peicai"
+		"AKIASWZGW2DAYYBF4WHP" = "acm-prd-bedrock"
+		"project" = "acm-prd"
+	}
 }
