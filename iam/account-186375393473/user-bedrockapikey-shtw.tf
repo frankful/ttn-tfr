@@ -8,4 +8,8 @@ import {
 resource "aws_iam_user" "user_BedrockAPIKey-shtw" {
 	name = "BedrockAPIKey-shtw"
 	path = "/"
+	tags = {
+		"Environment" = "acm-prd"
+		"project" = "acm-prd"
+	}
 }
