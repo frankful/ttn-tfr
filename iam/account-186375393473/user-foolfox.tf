@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_foolfox" {
 	name = "foolfox"
 	path = "/"
+	tags = {
+		"Name" = "foolfox"
+	}
 }
