@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_guance_chen" {
 	name = "guance.chen"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAXTLO6ODZ" = "s3"
+	}
 }
