@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_atsec-scan" {
 	name = "atsec-scan"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DA4EJFCYW3" = "atsec-scan"
+	}
 }
