@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_iam-readonly" {
 	name = "iam-readonly"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAQLXUMWAE" = "iam-readonly"
+	}
 }
