@@ -47,4 +47,8 @@ resource "aws_iam_policy" "managed_policy_gitlab-snapshot-manager" {
 			}
 		]
 	})
+	description = "gitlab-snapshot-manager"
+	tags = {
+		"Environment" = "dev"
+	}
 }
