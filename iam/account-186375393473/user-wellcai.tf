@@ -8,4 +8,8 @@ import {
 resource "aws_iam_user" "user_wellcai" {
 	name = "wellcai"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DA2T5VXO5F" = "cli"
+		"AKIASWZGW2DAYLQ3MG4T" = "s3_upload"
+	}
 }

@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_welltem" {
 	name = "welltem"
 	path = "/"
+	tags = {
+		"project" = "acm-prd"
+	}
 }

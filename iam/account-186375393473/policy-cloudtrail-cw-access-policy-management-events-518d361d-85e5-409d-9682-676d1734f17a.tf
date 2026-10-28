@@ -33,4 +33,5 @@ resource "aws_iam_policy" "managed_policy_Cloudtrail-CW-access-policy-management
 			}
 		]
 	})
+	description = "Policy for config CloudWathLogs for trail management-events, created by CloudTrail console"
 }

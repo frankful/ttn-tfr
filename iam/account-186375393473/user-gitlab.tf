@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_gitlab" {
 	name = "gitlab"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAYVZHRSSH" = "gitlab-backup"
+	}
 }

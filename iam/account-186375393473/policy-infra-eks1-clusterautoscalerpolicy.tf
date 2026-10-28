@@ -40,4 +40,7 @@ resource "aws_iam_policy" "managed_policy_infra-eks1-ClusterAutoscalerPolicy" {
 			}
 		]
 	})
+	tags = {
+		"Owner" = "platform-team"
+	}
 }

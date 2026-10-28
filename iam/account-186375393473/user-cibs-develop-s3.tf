@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_cibs-develop-s3" {
 	name = "cibs-develop-s3"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAT3VOZX4K" = "cibs-develop-s3"
+	}
 }

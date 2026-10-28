@@ -8,4 +8,8 @@ import {
 resource "aws_iam_user" "user_tdfoss3" {
 	name = "tdfoss3"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAQGRND3PY" = "runtime get plugin from tdfos"
+		"AKIASWZGW2DARZLVDHEV" = "temp end date 202160930"
+	}
 }

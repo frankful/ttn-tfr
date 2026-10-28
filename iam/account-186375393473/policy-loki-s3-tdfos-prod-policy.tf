@@ -33,4 +33,5 @@ resource "aws_iam_policy" "managed_policy_loki-s3-tdfos-prod-policy" {
 			}
 		]
 	})
+	description = "Allow Loki compactor access s3 bucket tdfos-prod"
 }

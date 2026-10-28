@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_allen_guan" {
 	name = "allen.guan"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAVXBLV22F" = "ak/sk"
+	}
 }

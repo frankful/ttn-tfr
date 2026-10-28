@@ -25,4 +25,5 @@ resource "aws_iam_policy" "managed_policy_payment-acquiring-prod-cf-invalidate-p
 			}
 		]
 	})
+	description = "Allow CI/CD to invalidate CloudFront cache for both S3 Web apps"
 }

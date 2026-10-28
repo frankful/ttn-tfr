@@ -259,4 +259,5 @@ resource "aws_iam_policy" "managed_policy_tdfos-prod-AWSLoadBalancerControllerIA
 			}
 		]
 	})
+	description = "IAM Policy for AWS Load Balancer Controller v2.11.0"
 }

@@ -259,4 +259,5 @@ resource "aws_iam_policy" "managed_policy_payment-acquiring-prod-AWSLoadBalancer
 			}
 		]
 	})
+	description = "IAM Policy for AWS Load Balancer Controller v2.11.0"
 }

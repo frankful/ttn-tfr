@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_sre-alert" {
 	name = "sre-alert"
 	path = "/"
+	tags = {
+		"Environment" = "dev"
+	}
 }

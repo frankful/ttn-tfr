@@ -8,4 +8,8 @@ import {
 resource "aws_iam_user" "user_wurong" {
 	name = "wurong"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAZJQ4ZXQK" = "supergateway"
+		"Name" = "wurong"
+	}
 }
