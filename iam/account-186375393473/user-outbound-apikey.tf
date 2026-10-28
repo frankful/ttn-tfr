@@ -8,4 +8,7 @@ import {
 resource "aws_iam_user" "user_outbound-apikey" {
 	name = "outbound-apikey"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAZYIEAYFS" = "outbound"
+	}
 }
