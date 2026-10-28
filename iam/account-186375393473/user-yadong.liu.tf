@@ -8,4 +8,8 @@ import {
 resource "aws_iam_user" "user_yadong_liu" {
 	name = "yadong.liu"
 	path = "/"
+	tags = {
+		"AKIASWZGW2DAUL2SWTKS" = "outbound"
+		"AKIASWZGW2DAXETNEBT3" = "uploadtest"
+	}
 }
