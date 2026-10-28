@@ -9,4 +9,7 @@ resource "aws_iam_openid_connect_provider" "identity_provider_https___oidc_eks_a
 	url             = "https://oidc.eks.ap-southeast-1.amazonaws.com/id/C4734F6B2A7D9F9A61C2DA6ED365B021"
 	client_id_list  = ["sts.amazonaws.com"]
 	thumbprint_list = ["9e99a48a9960b14926bb7f3b02e22da2b0ab7280"]
+	tags            = {
+		"Owner" = "platform-team"
+	}
 }
