@@ -259,4 +259,7 @@ resource "aws_iam_policy" "managed_policy_infra-eks1-AWSLoadBalancerControllerIA
 			}
 		]
 	})
+	tags = {
+		"Owner" = "platform-team"
+	}
 }
