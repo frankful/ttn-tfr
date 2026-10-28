@@ -33,4 +33,5 @@ resource "aws_iam_policy" "managed_policy_s3-tdfos-prod-connector-get" {
 			}
 		]
 	})
+	description = "Only GetObject & list for s3://tdfos-prod/connector/"
 }
