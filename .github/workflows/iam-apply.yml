@@ -7,8 +7,8 @@ name: iam-apply
 #     （systemd EnvironmentFile=/etc/iam-ci.env），仓库零密钥。
 # 注意：
 #   - Terraform 不递归加载子目录，按 account-* 目录逐个 -chdir 执行；
-#   - state 放在 /opt/actions-runner/terraform-state/（工作区外），
-#     checkout 的 git clean 不会碰到它；
+#   - state 存 S3：s3://dcits-prod-pulumi/iam-governance-hub/<account-dir>/iam/，
+#     S3 原生锁（use_lockfile）防并发写；
 #   - VM 到 github.com:443 间歇被墙，checkout 用裸 git 带重试
 #     （仓库是 public，无需鉴权）。
 
@@ -41,7 +41,6 @@ jobs:
       result: ${{ steps.apply.outcome }}
     env:
       TF_PLUGIN_CACHE_DIR: /opt/actions-runner/plugin-cache
-      STATE_ROOT: /opt/actions-runner/terraform-state
     defaults:
       run:
         working-directory: iam-baseline-test
@@ -72,14 +71,17 @@ jobs:
       - name: Terraform Init + Plan (per account)
         id: plan
         run: |
-          mkdir -p "$TF_PLUGIN_CACHE_DIR" "$STATE_ROOT"
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
           overall=0
           for dir in account-*; do
             [ -d "$dir" ] || continue
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: init"
             terraform -chdir="$dir" init -input=false -reconfigure \
-              -backend-config="path=$STATE_ROOT/$dir/terraform.tfstate" \
+              -backend-config="bucket=dcits-prod-pulumi" \
+              -backend-config="key=iam-governance-hub/$dir/iam/terraform.tfstate" \
+              -backend-config="region=ap-southeast-1" \
+              -backend-config="use_lockfile=true" \
               || { overall=1; echo "$dir init FAILED"; continue; }
             echo "=== $dir: plan"
             code=0
@@ -99,7 +101,10 @@ jobs:
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: apply"
             terraform -chdir="$dir" init -input=false -reconfigure \
-              -backend-config="path=$STATE_ROOT/$dir/terraform.tfstate" >/dev/null \
+              -backend-config="bucket=dcits-prod-pulumi" \
+              -backend-config="key=iam-governance-hub/$dir/iam/terraform.tfstate" \
+              -backend-config="region=ap-southeast-1" \
+              -backend-config="use_lockfile=true" >/dev/null \
               || { overall=1; echo "$dir init FAILED"; continue; }
             terraform -chdir="$dir" apply -auto-approve -input=false \
               || { overall=1; echo "$dir apply FAILED"; continue; }
@@ -130,3 +135,4 @@ jobs:
             -H "Authorization: Bearer $PLATFORM_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"status\":\"$STATUS\",\"commit_sha\":\"${{ github.sha }}\",\"ci_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+
