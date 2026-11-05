@@ -71,7 +71,7 @@ jobs:
             [ -d "$dir" ] || continue
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: init"
-            terraform -chdir="$dir" init -input=false \
+            terraform -chdir="$dir" init -input=false -reconfigure \
               -backend-config="path=$STATE_ROOT/$dir/terraform.tfstate" \
               || { overall=1; echo "$dir init FAILED"; continue; }
             echo "=== $dir: plan"
@@ -91,7 +91,7 @@ jobs:
             [ -d "$dir" ] || continue
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: apply"
-            terraform -chdir="$dir" init -input=false \
+            terraform -chdir="$dir" init -input=false -reconfigure \
               -backend-config="path=$STATE_ROOT/$dir/terraform.tfstate" >/dev/null \
               || { overall=1; echo "$dir init FAILED"; continue; }
             terraform -chdir="$dir" apply -auto-approve -input=false \
