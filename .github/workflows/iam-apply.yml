@@ -1,0 +1,80 @@
+name: iam-apply
+
+# 平台基线/工单 PR 合并进 main 后自动 apply，并回调平台关单。
+# 自建 runner（label: iam-ci）运行在平台同机 VM 上：
+#   - 平台回调走 127.0.0.1:18080；
+#   - AWS 凭证与 PLATFORM_TOKEN 来自 runner 服务环境
+#     （systemd EnvironmentFile=/etc/iam-ci.env），仓库零密钥。
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan 只读验证 / apply 真实执行"
+        required: false
+        default: "plan"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iam-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    # PR 合并才触发 apply；workflow_dispatch 按 mode 输入决定。
+    if: >-
+      (github.event_name == 'workflow_dispatch')
+      || (github.event_name == 'pull_request'
+          && github.event.pull_request.merged == true
+          && github.event.pull_request.base.ref == 'main')
+    runs-on: [self-hosted, iam-ci]
+    outputs:
+      result: ${{ steps.apply.outcome }}
+    defaults:
+      run:
+        working-directory: iam-baseline-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Terraform Init
+        id: init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -input=false -lock=false -detailed-exitcode || echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform Apply
+        id: apply
+        # PR 合并：必须执行；手动 dispatch：mode=apply 才执行。
+        if: github.event_name == 'pull_request' || inputs.mode == 'apply'
+        run: terraform apply -auto-approve -input=false
+
+  notify-platform:
+    needs: apply
+    # 只有工单 PR 才回调（分支 iam-ticket/iam-XXX）；基线 PR 无工单可关。
+    if: >-
+      always()
+      && needs.apply.result != 'skipped'
+      && startsWith(github.event.pull_request.head.ref, 'iam-ticket/')
+    runs-on: [self-hosted, iam-ci]
+    steps:
+      - name: Report apply result to IAM platform
+        env:
+          PLATFORM_URL: http://127.0.0.1:18080
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          TICKET_NO=$(echo "${BRANCH#iam-ticket/}" | tr '[:lower:]' '[:upper:]')
+          STATUS=succeeded
+          if [ "${{ needs.apply.outputs.result }}" != "success" ]; then
+            STATUS=failed
+          fi
+          echo "reporting $STATUS for $TICKET_NO"
+          curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET_NO/apply-result" \
+            -H "Authorization: Bearer $PLATFORM_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\\"status\\":\\"$STATUS\\",\\"commit_sha\\":\\"${{ github.sha }}\\",\\"ci_url\\":\\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\\"}"
