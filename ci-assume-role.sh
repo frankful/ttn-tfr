@@ -15,6 +15,8 @@ JWT=$(curl -fsSL --max-time 30 \
   "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
 
+python3 -c 'import json,sys,base64; p=sys.argv[1].split(".")[1]; print("token claims:", json.dumps(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4)))))' "$JWT"
+
 CREDS_JSON=$(aws sts assume-role-with-web-identity \
   --role-arn "$ROLE_ARN" \
   --role-session-name "tfr-ci-${GITHUB_RUN_ID:-local}" \
