@@ -135,6 +135,9 @@ jobs:
             description="terraform apply succeeded"
           fi
           body="{\"state\":\"$state\",\"context\":\"finops/terraform-apply\",\"description\":\"$description\"}"
+          echo "diag: token length=${#GITHUB_TOKEN} sha=$TARGET_SHA"
+          curl -s -o /dev/null -w "diag: /user status=%{http_code}\n" -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
+          curl -s -o /dev/null -w "diag: repo status=%{http_code}\n" -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/${{ github.repository }}
           for i in 1 2 3; do
             if curl -fsS -X POST \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
