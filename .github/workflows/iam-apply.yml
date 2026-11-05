@@ -46,18 +46,25 @@ jobs:
       run:
         working-directory: iam-baseline-test
     steps:
-      - name: Checkout (bare git with retry)
+      - name: Checkout (api tarball first, git fallback)
         run: |
           cd "$GITHUB_WORKSPACE"
-          [ -d .git ] || { git init -q && git remote add origin https://github.com/frankful/ttn-tfr; }
           ok=0
           for i in 1 2 3 4 5 6 7 8; do
+            # 主路径：api.github.com 的 tarball（VM 到 github.com:443 间歇被墙）
+            if curl -fsSL --max-time 180 -o /tmp/repo.tar.gz \
+                 "https://api.github.com/repos/frankful/ttn-tfr/tarball/$GITHUB_SHA"; then
+              find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+              tar xzf /tmp/repo.tar.gz -C . --strip-components=1 && ok=1 && break
+            fi
+            # 后备：git fetch（github.com 可达时）
+            [ -d .git ] || { git init -q && git remote add origin https://github.com/frankful/ttn-tfr; }
             if git fetch -q --depth=1 origin "$GITHUB_SHA" \
                && git checkout -q --force FETCH_HEAD \
                && git clean -qffdx; then
-              ok=1; break
+              ok=1 && break
             fi
-            echo "fetch attempt $i failed; retry in 20s"
+            echo "checkout attempt $i failed; retry in 20s"
             sleep 20
           done
           [ "$ok" = 1 ]
