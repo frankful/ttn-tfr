@@ -5,6 +5,8 @@ name: iam-apply
 #   - 平台回调走 127.0.0.1:18080；
 #   - AWS 凭证与 PLATFORM_TOKEN 来自 runner 服务环境
 #     （systemd EnvironmentFile=/etc/iam-ci.env），仓库零密钥。
+# Terraform 不递归加载子目录，因此按 account-* 目录逐个 -chdir 执行；
+# 每个账号目录独立 local state。versions.tf 缺失时从模块根复制。
 
 on:
   pull_request:
@@ -25,7 +27,6 @@ concurrency:
 
 jobs:
   apply:
-    # PR 合并才触发 apply；workflow_dispatch 按 mode 输入决定。
     if: >-
       (github.event_name == 'workflow_dispatch')
       || (github.event_name == 'pull_request'
@@ -34,25 +35,44 @@ jobs:
     runs-on: [self-hosted, iam-ci]
     outputs:
       result: ${{ steps.apply.outcome }}
+    env:
+      TF_PLUGIN_CACHE_DIR: /opt/actions-runner/plugin-cache
     defaults:
       run:
         working-directory: iam-baseline-test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Terraform Init
-        id: init
-        run: terraform init -input=false
-
-      - name: Terraform Plan
+      - name: Terraform Init + Plan (per account)
         id: plan
-        run: terraform plan -input=false -lock=false -detailed-exitcode || echo "exit=$?" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          overall=0
+          for dir in account-*; do
+            [ -d "$dir" ] || continue
+            [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
+            echo "=== $dir: init"
+            terraform -chdir="$dir" init -input=false || { overall=1; continue; }
+            echo "=== $dir: plan"
+            code=0
+            terraform -chdir="$dir" plan -input=false -lock=false -detailed-exitcode || code=$?
+            echo "$dir plan exit=$code"
+            if [ "$code" = "1" ]; then overall=1; fi
+          done
+          exit $overall
 
-      - name: Terraform Apply
+      - name: Terraform Apply (per account)
         id: apply
-        # PR 合并：必须执行；手动 dispatch：mode=apply 才执行。
         if: github.event_name == 'pull_request' || inputs.mode == 'apply'
-        run: terraform apply -auto-approve -input=false
+        run: |
+          overall=0
+          for dir in account-*; do
+            [ -d "$dir" ] || continue
+            [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
+            echo "=== $dir: apply"
+            terraform -chdir="$dir" apply -auto-approve -input=false || { overall=1; continue; }
+          done
+          exit $overall
 
   notify-platform:
     needs: apply
@@ -77,4 +97,4 @@ jobs:
           curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET_NO/apply-result" \
             -H "Authorization: Bearer $PLATFORM_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\\"status\\":\\"$STATUS\\",\\"commit_sha\\":\\"${{ github.sha }}\\",\\"ci_url\\":\\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\\"}"
+            -d "{\"status\":\"$STATUS\",\"commit_sha\":\"${{ github.sha }}\",\"ci_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
