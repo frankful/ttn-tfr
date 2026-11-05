@@ -25,6 +25,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  statuses: write
 
 concurrency:
   group: iam-apply
@@ -112,7 +113,28 @@ jobs:
             terraform -chdir="$dir" apply -auto-approve -input=false \
               || { overall=1; echo "$dir apply FAILED"; continue; }
           done
+          echo "overall=$overall" >> "$GITHUB_OUTPUT"
           exit $overall
+
+      # A12③：把 apply 结果写成 commit status（context: finops/terraform-apply）。
+      # 平台 gitstatus poller 依赖它判断「CI 绿/红」——CI 回调开启后 merged 工单
+      # 等 status success 才自动关单（IAM_CI_APPLY_CALLBACK=true）。
+      - name: Report finops/terraform-apply commit status
+        if: always() && steps.apply.outcome != 'skipped'
+        env:
+          APPLY_OVERALL: ${{ steps.apply.outputs.overall }}
+        run: |
+          state=failure
+          description="terraform apply failed (exit=${APPLY_OVERALL:-unknown})"
+          if [ "$APPLY_OVERALL" = "0" ]; then
+            state=success
+            description="terraform apply succeeded"
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -d "{\"state\":\"$state\",\"context\":\"finops/terraform-apply\",\"description\":\"$description\"}"
 
   notify-platform:
     needs: apply
@@ -138,4 +160,5 @@ jobs:
             -H "Authorization: Bearer $PLATFORM_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"status\":\"$STATUS\",\"commit_sha\":\"${{ github.sha }}\",\"ci_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+
 
