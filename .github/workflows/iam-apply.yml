@@ -119,10 +119,14 @@ jobs:
       # A12③：把 apply 结果写成 commit status（context: finops/terraform-apply）。
       # 平台 gitstatus poller 依赖它判断「CI 绿/红」——CI 回调开启后 merged 工单
       # 等 status success 才自动关单（IAM_CI_APPLY_CALLBACK=true）。
+      # 目标 SHA 必须是 PR head commit：poller 按 head SHA 查 statuses，而
+      # pull_request 事件的 github.sha 是 merge ref，写在那里 poller 看不到。
       - name: Report finops/terraform-apply commit status
         if: always() && steps.apply.outcome != 'skipped'
+        continue-on-error: true
         env:
           APPLY_OVERALL: ${{ steps.apply.outputs.overall }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           state=failure
           description="terraform apply failed (exit=${APPLY_OVERALL:-unknown})"
@@ -130,11 +134,21 @@ jobs:
             state=success
             description="terraform apply succeeded"
           fi
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
-            -d "{\"state\":\"$state\",\"context\":\"finops/terraform-apply\",\"description\":\"$description\"}"
+          body="{\"state\":\"$state\",\"context\":\"finops/terraform-apply\",\"description\":\"$description\"}"
+          for i in 1 2 3; do
+            if curl -fsS -X POST \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/statuses/${TARGET_SHA}" \
+              -d "$body"; then
+              echo "commit status $state written to $TARGET_SHA"
+              exit 0
+            fi
+            echo "status write attempt $i failed; retry in 5s"
+            sleep 5
+          done
+          echo "WARNING: failed to write finops/terraform-apply commit status; poller will not see CI result"
+          exit 0
 
   notify-platform:
     needs: apply
