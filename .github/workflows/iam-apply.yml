@@ -5,8 +5,12 @@ name: iam-apply
 #   - 平台回调走 127.0.0.1:18080；
 #   - AWS 凭证与 PLATFORM_TOKEN 来自 runner 服务环境
 #     （systemd EnvironmentFile=/etc/iam-ci.env），仓库零密钥。
-# Terraform 不递归加载子目录，因此按 account-* 目录逐个 -chdir 执行；
-# 每个账号目录独立 local state。versions.tf 缺失时从模块根复制。
+# 注意：
+#   - Terraform 不递归加载子目录，按 account-* 目录逐个 -chdir 执行；
+#   - state 放在 /opt/actions-runner/terraform-state/（工作区外），
+#     checkout 的 git clean 不会碰到它；
+#   - VM 到 github.com:443 间歇被墙，checkout 用裸 git 带重试
+#     （仓库是 public，无需鉴权）。
 
 on:
   pull_request:
@@ -37,22 +41,39 @@ jobs:
       result: ${{ steps.apply.outcome }}
     env:
       TF_PLUGIN_CACHE_DIR: /opt/actions-runner/plugin-cache
+      STATE_ROOT: /opt/actions-runner/terraform-state
     defaults:
       run:
         working-directory: iam-baseline-test
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (bare git with retry)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          [ -d .git ] || { git init -q && git remote add origin https://github.com/frankful/ttn-tfr; }
+          ok=0
+          for i in 1 2 3 4 5 6 7 8; do
+            if git fetch -q --depth=1 origin "$GITHUB_SHA" \
+               && git checkout -q --force FETCH_HEAD \
+               && git clean -qffdx; then
+              ok=1; break
+            fi
+            echo "fetch attempt $i failed; retry in 20s"
+            sleep 20
+          done
+          [ "$ok" = 1 ]
 
       - name: Terraform Init + Plan (per account)
         id: plan
         run: |
-          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          mkdir -p "$TF_PLUGIN_CACHE_DIR" "$STATE_ROOT"
           overall=0
           for dir in account-*; do
             [ -d "$dir" ] || continue
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: init"
-            terraform -chdir="$dir" init -input=false || { overall=1; continue; }
+            terraform -chdir="$dir" init -input=false \
+              -backend-config="path=$STATE_ROOT/$dir/terraform.tfstate" \
+              || { overall=1; echo "$dir init FAILED"; continue; }
             echo "=== $dir: plan"
             code=0
             terraform -chdir="$dir" plan -input=false -lock=false -detailed-exitcode || code=$?
@@ -70,7 +91,11 @@ jobs:
             [ -d "$dir" ] || continue
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: apply"
-            terraform -chdir="$dir" apply -auto-approve -input=false || { overall=1; continue; }
+            terraform -chdir="$dir" init -input=false \
+              -backend-config="path=$STATE_ROOT/$dir/terraform.tfstate" >/dev/null \
+              || { overall=1; echo "$dir init FAILED"; continue; }
+            terraform -chdir="$dir" apply -auto-approve -input=false \
+              || { overall=1; echo "$dir apply FAILED"; continue; }
           done
           exit $overall
 
