@@ -7,6 +7,10 @@ name: iam-apply
 #     （systemd EnvironmentFile=/etc/iam-ci.env），仓库零密钥。
 # 注意：
 #   - Terraform 不递归加载子目录，按 account-* 目录逐个 -chdir 执行；
+#   - 账号范围原子圈定（fail-closed）：PR 事件只 apply PR 变更文件命中的
+#     account-* 目录（pulls/files 分页拉全）；dispatch 事件遍历全部目录
+#     （运维显式动作）。范围只算一次、后续步骤只消费其输出；API 失败或
+#     范围为空绝不回退成"全部账号"，防止把无关账号的漂移算到工单头上；
 #   - state 存 S3：s3://dcits-prod-pulumi/iam-governance-hub/<account-dir>/iam/，
 #     S3 原生锁（use_lockfile）防并发写；
 #   - apply 成功后追加一次只读验证 plan（-detailed-exitcode，C3）：
@@ -76,14 +80,77 @@ jobs:
           done
           [ "$ok" = 1 ]
 
+      # 账号范围原子判定：唯一一次计算，后续 plan/apply/verify/report 只消费
+      # steps.scope.outputs.dirs。PR 事件按变更文件圈定（pulls/files 分页拉全）；
+      # dispatch 事件遍历全部目录。fail-closed：API 失败让 run 挂掉、范围为空
+      # 则跳过一切 apply——绝不回退成"全部账号"。
+      - name: Resolve account scope (atomic, fail-closed)
+        id: scope
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$PR_NUMBER" != "" ]; then
+            cat > /tmp/scope_accounts.py <<'PY'
+          import json, sys, urllib.request
+          token, repo, number = sys.argv[1], sys.argv[2], sys.argv[3]
+          hits = set()
+          page = 1
+          while True:
+              url = (f"https://api.github.com/repos/{repo}/pulls/{number}/files"
+                     f"?per_page=100&page={page}")
+              req = urllib.request.Request(url, headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+              })
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  if resp.status != 200:
+                      sys.exit(f"pulls/files page {page} -> HTTP {resp.status}")
+                  files = json.load(resp)
+              if not files:
+                  break
+              for f in files:
+                  name = f.get("filename", "")
+                  if name.startswith("iam-baseline-test/account-"):
+                      parts = name.split("/")
+                      if len(parts) >= 3:
+                          hits.add(parts[1])
+              page += 1
+              if page > 20:
+                  sys.exit("pulls/files exceeds 20 pages; refusing to guess scope")
+          print(" ".join(sorted(hits)))
+          PY
+            dirs=$(python3 /tmp/scope_accounts.py "$GITHUB_TOKEN" "$REPO" "$PR_NUMBER")
+          else
+            dirs=""
+            for d in account-*; do
+              if [ -d "$d" ]; then dirs="$dirs $d"; fi
+            done
+            dirs=${dirs# }
+          fi
+          # fail-closed：命中的目录必须真实存在（PR 删目录的场景不猜，留给人工）
+          for d in $dirs; do
+            [ -d "$d" ] || { echo "ERROR: scoped dir '$d' missing from workspace (deleted in PR?)"; exit 1; }
+          done
+          if [ -z "$dirs" ]; then
+            echo "scope: EMPTY - no account dirs affected, all apply steps will be skipped"
+          else
+            echo "scope: [$dirs]"
+          fi
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Init + Plan (per account)
         id: plan
+        if: steps.scope.outputs.dirs != ''
+        env:
+          DIRS: ${{ steps.scope.outputs.dirs }}
         run: |
           . "$GITHUB_WORKSPACE/ci-assume-role.sh"
           mkdir -p "$TF_PLUGIN_CACHE_DIR"
           overall=0
-          for dir in account-*; do
-            [ -d "$dir" ] || continue
+          for dir in $DIRS; do
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: init"
             terraform -chdir="$dir" init -input=false -reconfigure \
@@ -102,12 +169,13 @@ jobs:
 
       - name: Terraform Apply (per account)
         id: apply
-        if: github.event_name == 'pull_request' || inputs.mode == 'apply'
+        if: steps.scope.outputs.dirs != '' && (github.event_name == 'pull_request' || inputs.mode == 'apply')
+        env:
+          DIRS: ${{ steps.scope.outputs.dirs }}
         run: |
           . "$GITHUB_WORKSPACE/ci-assume-role.sh"
           overall=0
-          for dir in account-*; do
-            [ -d "$dir" ] || continue
+          for dir in $DIRS; do
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: apply"
             terraform -chdir="$dir" init -input=false -reconfigure \
@@ -127,7 +195,9 @@ jobs:
       # 差异只通过 drift-reports 上报 + notify note 呈现。
       - name: Post-apply verify plan (per account)
         id: verify
-        if: always() && steps.apply.outcome == 'success'
+        if: always() && steps.apply.outcome == 'success' && steps.scope.outputs.dirs != ''
+        env:
+          DIRS: ${{ steps.scope.outputs.dirs }}
         run: |
           . "$GITHUB_WORKSPACE/ci-assume-role.sh"
           mkdir -p /tmp/iam-verify
@@ -154,8 +224,7 @@ jobs:
           print(json.dumps(findings))
           PY
           clean=0; drift=0; broken=0
-          for dir in account-*; do
-            [ -d "$dir" ] || continue
+          for dir in $DIRS; do
             [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
             echo "=== $dir: verify plan"
             terraform -chdir="$dir" init -input=false -reconfigure \
