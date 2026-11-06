@@ -9,6 +9,9 @@ name: iam-apply
 #   - Terraform 不递归加载子目录，按 account-* 目录逐个 -chdir 执行；
 #   - state 存 S3：s3://dcits-prod-pulumi/iam-governance-hub/<account-dir>/iam/，
 #     S3 原生锁（use_lockfile）防并发写；
+#   - apply 成功后追加一次只读验证 plan（-detailed-exitcode，C3）：
+#     0=空上报 drift-reports（确定干净，自动关闭 stale ci 发现）；
+#     2=按资源上报差异（走平台告警链路）；1=plan 坏了不上报（避免误关真实漂移）；
 #   - VM 到 github.com:443 间歇被墙，checkout 用裸 git 带重试
 #     （仓库是 public，无需鉴权）。
 
@@ -41,6 +44,9 @@ jobs:
     runs-on: [self-hosted, iam-ci]
     outputs:
       result: ${{ steps.apply.outcome }}
+      verify_clean: ${{ steps.verify.outputs.clean }}
+      verify_drift: ${{ steps.verify.outputs.drift }}
+      verify_broken: ${{ steps.verify.outputs.broken }}
     env:
       TF_PLUGIN_CACHE_DIR: /opt/actions-runner/plugin-cache
     defaults:
@@ -116,6 +122,108 @@ jobs:
           echo "overall=$overall" >> "$GITHUB_OUTPUT"
           exit $overall
 
+      # C3：apply 成功后立刻跑一次只读验证 plan，确认「apply 后归零」。
+      # 这一步永不改变 run 的红绿（apply 已成功、工单该关就关）：
+      # 差异只通过 drift-reports 上报 + notify note 呈现。
+      - name: Post-apply verify plan (per account)
+        id: verify
+        if: always() && steps.apply.outcome == 'success'
+        run: |
+          . "$GITHUB_WORKSPACE/ci-assume-role.sh"
+          mkdir -p /tmp/iam-verify
+          cat > /tmp/iam-verify/extract.py <<'PY'
+          import json, sys
+          plan = json.load(sys.stdin)
+          findings = []
+          for rc in plan.get("resource_changes", []):
+              change = rc.get("change") or {}
+              actions = [a for a in change.get("actions", []) if a != "no-op"]
+              if not actions:
+                  continue
+              address = rc["address"]
+              rtype = rc.get("type", "")
+              kind = rtype.replace("aws_iam_", "", 1) if rtype.startswith("aws_iam_") else rtype
+              # delete=声明将被删 → declared_missing；其余（update/create）→ attribute。
+              change_type = "declared_missing" if actions == ["delete"] else "attribute"
+              findings.append({
+                  "resource_address": address,
+                  "kind": kind,
+                  "change_type": change_type,
+                  "summary": "plan actions: " + ",".join(actions),
+              })
+          print(json.dumps(findings))
+          PY
+          clean=0; drift=0; broken=0
+          for dir in account-*; do
+            [ -d "$dir" ] || continue
+            [ -f "$dir/versions.tf" ] || cp versions.tf "$dir/"
+            echo "=== $dir: verify plan"
+            terraform -chdir="$dir" init -input=false -reconfigure \
+              -backend-config="bucket=dcits-prod-pulumi" \
+              -backend-config="key=iam-governance-hub/$dir/iam/terraform.tfstate" \
+              -backend-config="region=ap-southeast-1" \
+              -backend-config="use_lockfile=true" >/dev/null \
+              || { broken=$((broken+1)); echo "$dir init FAILED"; continue; }
+            code=0
+            terraform -chdir="$dir" plan -input=false -lock=false -detailed-exitcode \
+              -out=/tmp/iam-verify/plan.bin || code=$?
+            case "$code" in
+              0)
+                clean=$((clean+1))
+                echo '[]' > "/tmp/iam-verify/$dir.findings.json"
+                ;;
+              2)
+                drift=$((drift+1))
+                terraform -chdir="$dir" show -json /tmp/iam-verify/plan.bin \
+                  | python3 /tmp/iam-verify/extract.py > "/tmp/iam-verify/$dir.findings.json" \
+                  || { echo "$dir: extract findings failed"; echo 'null' > "/tmp/iam-verify/$dir.findings.json"; }
+                ;;
+              *)
+                broken=$((broken+1))
+                echo "$dir verify plan exit=$code; NOT reporting (broken plan would falsely close real drift)"
+                ;;
+            esac
+          done
+          echo "verify summary: clean=$clean drift=$drift broken=$broken"
+          echo "clean=$clean" >> "$GITHUB_OUTPUT"
+          echo "drift=$drift" >> "$GITHUB_OUTPUT"
+          echo "broken=$broken" >> "$GITHUB_OUTPUT"
+
+      # C3：把验证结果上报 POST /aws/drift-reports（替换语义）。
+      # clean 账号报空 findings——这是「确定干净」的信号，会自动关闭 stale ci 发现；
+      # 差异账号按资源上报；上报失败只告警不阻断（日志 WARNING + 后续 note）。
+      - name: Report post-apply verification to drift-reports
+        if: always() && steps.verify.outcome == 'success'
+        continue-on-error: true
+        env:
+          PLATFORM_URL: http://127.0.0.1:18080
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          reported=0
+          for f in /tmp/iam-verify/account-*.findings.json; do
+            [ -f "$f" ] || continue
+            dir=$(basename "$f" .findings.json)
+            account_id="${dir#account-}"
+            findings=$(cat "$f")
+            if [ "$findings" = "null" ]; then
+              echo "skip $dir: findings extraction failed earlier"
+              continue
+            fi
+            payload=$(printf '{"account_id":"%s","commit_sha":"%s","ci_url":"%s","findings":%s}' \
+              "$account_id" "$TARGET_SHA" "$CI_URL" "$findings")
+            echo "=== reporting $dir (account $account_id): $findings"
+            if curl -sf -X POST "$PLATFORM_URL/api/v1/aws/drift-reports" \
+              -H "Authorization: Bearer $PLATFORM_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$payload"; then
+              reported=$((reported+1))
+            else
+              echo "WARNING: drift report for $dir failed (non-blocking)"
+            fi
+          done
+          echo "drift reports accepted: $reported"
+
       # A12③：把 apply 结果写成 commit status（context: finops/terraform-apply）。
       # 平台 gitstatus poller 依赖它判断「CI 绿/红」——CI 回调开启后 merged 工单
       # 等 status success 才自动关单（IAM_CI_APPLY_CALLBACK=true）。
@@ -163,6 +271,9 @@ jobs:
       - name: Report apply result to IAM platform
         env:
           PLATFORM_URL: http://127.0.0.1:18080
+          VERIFY_CLEAN: ${{ needs.apply.outputs.verify_clean }}
+          VERIFY_DRIFT: ${{ needs.apply.outputs.verify_drift }}
+          VERIFY_BROKEN: ${{ needs.apply.outputs.verify_broken }}
         run: |
           BRANCH="${{ github.event.pull_request.head.ref }}"
           TICKET_NO=$(echo "${BRANCH#iam-ticket/}" | tr '[:lower:]' '[:upper:]')
@@ -170,10 +281,18 @@ jobs:
           if [ "${{ needs.apply.outputs.result }}" != "success" ]; then
             STATUS=failed
           fi
-          echo "reporting $STATUS for $TICKET_NO"
+          # C3：apply 成功时把归零校验结论带进 note（落工单时间线）。
+          NOTE=""
+          if [ "$STATUS" = "succeeded" ] && [ -n "$VERIFY_CLEAN" ]; then
+            NOTE="post-apply verify: clean=$VERIFY_CLEAN drift=$VERIFY_DRIFT broken=$VERIFY_BROKEN"
+            if [ "${VERIFY_DRIFT:-0}" != "0" ]; then
+              NOTE="$NOTE (differences reported to drift findings)"
+            fi
+          fi
+          echo "reporting $STATUS for $TICKET_NO (note: $NOTE)"
           curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET_NO/apply-result" \
             -H "Authorization: Bearer $PLATFORM_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"status\":\"$STATUS\",\"commit_sha\":\"${{ github.sha }}\",\"ci_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+            -d "{\"status\":\"$STATUS\",\"commit_sha\":\"${{ github.sha }}\",\"ci_url\":\"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\",\"note\":\"$NOTE\"}"
 
 
